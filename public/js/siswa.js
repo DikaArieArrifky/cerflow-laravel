@@ -47,7 +47,75 @@ function getTripletByCardId(cardId, map = currentMap) {
 }
 
 function isCorrectConnection(connection) {
-    return getCardTripletId(connection.from) === getCardTripletId(connection.to);
+    if (!connection || !connection.from || !connection.to) return false;
+    const fromId = getCardTripletId(connection.from);
+    const toId = getCardTripletId(connection.to);
+    const fromType = String(connection.from)[0];
+    const toType = String(connection.to)[0];
+
+    const isMatchingId = fromId === toId;
+    const isValidPair = (fromType === 'c' && toType === 'e') || (fromType === 'e' && toType === 'r');
+    return isMatchingId && isValidPair;
+}
+
+/**
+ * Disconnect a specific line between two cards.
+ */
+function disconnectLine(fromId, toId) {
+    if (isLocked || isReadingModalOpen) return;
+    const connIndex = connections.findIndex(c => c.from === fromId && c.to === toId);
+    if (connIndex !== -1) {
+        const [removed] = connections.splice(connIndex, 1);
+        logAction('disconnect', { from: removed.from, to: removed.to });
+        saveState();
+        updateConnectionCounter();
+        redrawLines();
+        if (window.Toast) {
+            Toast.info("Koneksi diputus.");
+        }
+    }
+}
+
+/**
+ * Handle connecting two nodes (auto-resolves Claim->Evidence or Evidence->Reasoning regardless of drag direction).
+ */
+function handleConnectNodes(nodeA, nodeB) {
+    const cardA = nodeA.closest('.card-item');
+    const cardB = nodeB.closest('.card-item');
+    if (!cardA || !cardB || cardA === cardB) return;
+
+    const typeA = cardA.id[0]; // 'c', 'e', 'r'
+    const typeB = cardB.id[0]; // 'c', 'e', 'r'
+
+    let fromCard = null;
+    let toCard = null;
+
+    if ((typeA === 'c' && typeB === 'e') || (typeA === 'e' && typeB === 'c')) {
+        fromCard = typeA === 'c' ? cardA : cardB;
+        toCard = typeA === 'c' ? cardB : cardA;
+    } else if ((typeA === 'e' && typeB === 'r') || (typeA === 'r' && typeB === 'e')) {
+        fromCard = typeA === 'e' ? cardA : cardB;
+        toCard = typeA === 'e' ? cardB : cardA;
+    } else {
+        if (window.Toast) {
+            Toast.warning("Hubungkan Claim ke Evidence, atau Evidence ke Reasoning.");
+        }
+        return;
+    }
+
+    if (fromCard && toCard) {
+        const existingFrom = connections.find(c => c.from === fromCard.id);
+        const existingTo = connections.find(c => c.to === toCard.id);
+
+        if (existingFrom) logAction('disconnect', { from: existingFrom.from, to: existingFrom.to });
+        if (existingTo && existingTo !== existingFrom) logAction('disconnect', { from: existingTo.from, to: existingTo.to });
+
+        connections = connections.filter(c => c.from !== fromCard.id && c.to !== toCard.id);
+        connections.push({ from: fromCard.id, to: toCard.id });
+        logAction('connect', { from: fromCard.id, to: toCard.id });
+        saveState();
+        updateConnectionCounter();
+    }
 }
 
 /**
@@ -304,15 +372,24 @@ function escapeHtml(str) {
 }
 
 /**
- * Get the center position of a node relative to view-editor
+ * Get the center position of a node relative to svg-canvas
  */
 function getNodePos(node) {
-    const editor = document.getElementById('view-editor');
-    const editorRect = editor ? editor.getBoundingClientRect() : { left: 0, top: 0 };
+    const svg = document.getElementById('svg-canvas');
+    if (!svg) {
+        const editor = document.getElementById('cer-canvas-container') || document.getElementById('view-editor');
+        const editorRect = editor ? editor.getBoundingClientRect() : { left: 0, top: 0 };
+        const rect = node.getBoundingClientRect();
+        return {
+            x: rect.left - editorRect.left + (rect.width / 2),
+            y: rect.top - editorRect.top + (rect.height / 2)
+        };
+    }
+    const svgRect = svg.getBoundingClientRect();
     const rect = node.getBoundingClientRect();
     return {
-        x: rect.left - editorRect.left + (rect.width / 2) + (editor ? editor.scrollLeft : 0),
-        y: rect.top - editorRect.top + (rect.height / 2) + (editor ? editor.scrollTop : 0)
+        x: rect.left - svgRect.left + (rect.width / 2),
+        y: rect.top - svgRect.top + (rect.height / 2)
     };
 }
 
@@ -335,6 +412,15 @@ function redrawLines() {
     const lg = document.getElementById('line-group');
     if(!lg) return;
     lg.innerHTML = '';
+
+    const canvasContainer = document.getElementById('cer-canvas-container') || document.getElementById('view-editor');
+    const svg = document.getElementById('svg-canvas');
+    if (canvasContainer && svg) {
+        const scrollH = Math.max(canvasContainer.scrollHeight, canvasContainer.clientHeight);
+        const scrollW = Math.max(canvasContainer.scrollWidth, canvasContainer.clientWidth);
+        svg.style.height = scrollH + 'px';
+        svg.style.width = scrollW + 'px';
+    }
     
     connections.forEach(c => {
         const elFrom = document.getElementById(c.from);
@@ -372,6 +458,13 @@ function redrawLines() {
                 
                 path.setAttribute("stroke-linecap", "round");
                 path.classList.add('line-path');
+                path.setAttribute("title", isLocked ? "" : "Klik garis untuk memutuskan koneksi");
+                if (!isLocked) {
+                    path.addEventListener('click', (evt) => {
+                        evt.stopPropagation();
+                        disconnectLine(c.from, c.to);
+                    });
+                }
                 lg.appendChild(path);
             }
         }
@@ -623,9 +716,10 @@ function openSubmitModal() {
     const currentConnCount = connections.length;
 
     const connectedClaims = new Set(connections.filter(c => c.from.startsWith('c-')).map(c => c.from)).size;
-    const connectedEvidences = new Set(
-        connections.filter(c => c.to.startsWith('e-')).map(c => c.to)
-    ).size;
+    const connectedEvidences = new Set([
+        ...connections.filter(c => c.to.startsWith('e-')).map(c => c.to),
+        ...connections.filter(c => c.from.startsWith('e-')).map(c => c.from)
+    ]).size;
     const connectedReasonings = new Set(connections.filter(c => c.to.startsWith('r-')).map(c => c.to)).size;
 
     const totalTriplets = currentMap.triplets.length;
@@ -920,9 +1014,10 @@ function autoArrange() {
 // ─── Event Listeners ──────────────────────────────────────────────────────────
 document.addEventListener('mousedown', (e) => {
     if (isLocked || isReadingModalOpen) return;
-    if (e.target.classList.contains('node')) {
+    const node = e.target.classList.contains('node') ? e.target : e.target.closest('.node');
+    if (node) {
         isDrawing = true;
-        startNode = e.target;
+        startNode = node;
         const pos = getNodePos(startNode);
         const dl = document.getElementById('drawing-line');
         if (dl) {
@@ -937,11 +1032,11 @@ document.addEventListener('mousedown', (e) => {
 document.addEventListener('mousemove', (e) => {
     if (isDrawing) {
         const dl = document.getElementById('drawing-line');
-        const editor = document.getElementById('view-editor');
-        const editorRect = editor ? editor.getBoundingClientRect() : { left: 0, top: 0 };
-        if (dl) {
-            dl.setAttribute('x2', e.clientX - editorRect.left + (editor ? editor.scrollLeft : 0));
-            dl.setAttribute('y2', e.clientY - editorRect.top + (editor ? editor.scrollTop : 0));
+        const svg = document.getElementById('svg-canvas');
+        if (dl && svg) {
+            const svgRect = svg.getBoundingClientRect();
+            dl.setAttribute('x2', e.clientX - svgRect.left);
+            dl.setAttribute('y2', e.clientY - svgRect.top);
         }
     }
 });
@@ -949,60 +1044,98 @@ document.addEventListener('mousemove', (e) => {
 document.addEventListener('mouseup', (e) => {
     if (!isDrawing) return;
     
-    if (e.target.classList.contains('node')) {
-        const sCard = startNode.closest('.card-item');
-        const tCard = e.target.closest('.card-item');
+    const targetNode = e.target.classList.contains('node') 
+        ? e.target 
+        : e.target.closest('.node');
         
-        let fromCard, toCard;
-
-        if (startNode.classList.contains('out') && e.target.classList.contains('in')) {
-            fromCard = sCard;
-            toCard = tCard;
-        } else if (startNode.classList.contains('in') && e.target.classList.contains('out')) {
-            fromCard = tCard;
-            toCard = sCard;
-        }
-        
-        if (fromCard && toCard) {
-            const fType = fromCard.id[0], tType = toCard.id[0];
-            if ((fType === 'c' && tType === 'e') || (fType === 'e' && tType === 'r')) {
-                const existingFrom = connections.find(c => c.from === fromCard.id);
-                const existingTo = connections.find(c => c.to === toCard.id);
-                
-                if (existingFrom) logAction('disconnect', { from: existingFrom.from, to: existingFrom.to });
-                if (existingTo && existingTo !== existingFrom) logAction('disconnect', { from: existingTo.from, to: existingTo.to });
-
-                connections = connections.filter(c => c.from !== fromCard.id && c.to !== toCard.id);
-                connections.push({ from: fromCard.id, to: toCard.id });
-                logAction('connect', { from: fromCard.id, to: toCard.id });
-                saveState();
-                updateConnectionCounter();
-            }
-        }
-    } else {
+    if (targetNode && startNode && targetNode !== startNode) {
+        handleConnectNodes(startNode, targetNode);
+    } else if (targetNode && targetNode === startNode) {
+        // Klik langsung pada node tanpa menyeret: putus koneksi yang terpasang pada node tersebut jika ada
         const sCard = startNode.closest('.card-item');
         if (sCard) {
-            let existingConn;
-            if (startNode.classList.contains('out')) {
-                existingConn = connections.find(c => c.from === sCard.id);
-            } else if (startNode.classList.contains('in')) {
-                existingConn = connections.find(c => c.to === sCard.id);
-            }
-
-            if (existingConn) {
-                logAction('disconnect', { from: existingConn.from, to: existingConn.to });
-                connections = connections.filter(c => c !== existingConn);
-                saveState();
-                updateConnectionCounter();
+            const conn = startNode.classList.contains('out')
+                ? connections.find(c => c.from === sCard.id)
+                : connections.find(c => c.to === sCard.id);
+            if (conn) {
+                disconnectLine(conn.from, conn.to);
             }
         }
     }
+    // Jika dilepas di kanvas kosong, hanya batalkan tarikan garis (JANGAN hapus koneksi yang sudah ada)
     
     if (feedbackActive) {
         feedbackActive = false;
         updateFeedbackUI();
     }
     
+    isDrawing = false;
+    startNode = null;
+    resetDrawingLine();
+    redrawLines();
+});
+
+// ─── Touch Event Listeners (Mobile / Tablet / Touchscreen) ───────────────────
+document.addEventListener('touchstart', (e) => {
+    if (isLocked || isReadingModalOpen || !e.touches || e.touches.length === 0) return;
+    const touch = e.touches[0];
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    const node = target && (target.classList.contains('node') ? target : target.closest('.node'));
+    if (node) {
+        isDrawing = true;
+        startNode = node;
+        const pos = getNodePos(startNode);
+        const dl = document.getElementById('drawing-line');
+        if (dl) {
+            dl.setAttribute('x1', pos.x);
+            dl.setAttribute('y1', pos.y);
+            dl.setAttribute('x2', pos.x);
+            dl.setAttribute('y2', pos.y);
+        }
+    }
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+    if (isDrawing && e.touches && e.touches.length > 0) {
+        const touch = e.touches[0];
+        const dl = document.getElementById('drawing-line');
+        const svg = document.getElementById('svg-canvas');
+        if (dl && svg) {
+            const svgRect = svg.getBoundingClientRect();
+            dl.setAttribute('x2', touch.clientX - svgRect.left);
+            dl.setAttribute('y2', touch.clientY - svgRect.top);
+        }
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+    if (!isDrawing) return;
+    const touch = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0] : null;
+    let targetNode = null;
+    if (touch) {
+        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+        targetNode = target && (target.classList.contains('node') ? target : target.closest('.node'));
+    }
+
+    if (targetNode && startNode && targetNode !== startNode) {
+        handleConnectNodes(startNode, targetNode);
+    } else if (targetNode && targetNode === startNode) {
+        const sCard = startNode.closest('.card-item');
+        if (sCard) {
+            const conn = startNode.classList.contains('out')
+                ? connections.find(c => c.from === sCard.id)
+                : connections.find(c => c.to === sCard.id);
+            if (conn) {
+                disconnectLine(conn.from, conn.to);
+            }
+        }
+    }
+
+    if (feedbackActive) {
+        feedbackActive = false;
+        updateFeedbackUI();
+    }
+
     isDrawing = false;
     startNode = null;
     resetDrawingLine();

@@ -35,12 +35,20 @@
         pointer-events: none;
         z-index: 10;
     }
+    #line-group path {
+        pointer-events: stroke;
+        cursor: pointer;
+        transition: stroke-width 0.15s ease, stroke 0.15s ease;
+    }
+    #line-group path:hover {
+        stroke: #ef4444 !important;
+        stroke-width: 5px !important;
+    }
     #view-editor {
         position: relative;
     }
     .kanban-column {
         min-height: 480px;
-        overflow-y: auto;
         padding: 1rem;
     }
 </style>
@@ -179,7 +187,7 @@
     </div>
 
     {{-- Interactive CER Canvas --}}
-    <div class="flex-1 relative overflow-y-auto pb-24 p-6 bg-slate-50/50">
+    <div id="cer-canvas-container" class="flex-1 relative overflow-y-auto pb-24 p-6 bg-slate-50/50">
         <svg id="svg-canvas">
             <g id="line-group"></g>
             <line id="drawing-line" stroke="#4f46e5" stroke-width="2.5" stroke-dasharray="6,4" x1="-1000" y1="-1000" x2="-1000" y2="-1000" />
