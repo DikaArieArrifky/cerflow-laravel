@@ -25,8 +25,27 @@ class ScoringService
     }
 
     /**
+     * Extract card type prefix (e.g. 'c-24' -> 'c', 'e-24' -> 'e', 'r-24' -> 'r').
+     */
+    public function getCardType(string $cardId): ?string
+    {
+        $parts = explode('-', $cardId);
+        if (count($parts) >= 2 && in_array($parts[0], ['c', 'e', 'r'], true)) {
+            return $parts[0];
+        }
+
+        return null;
+    }
+
+    /**
      * Calculate CER score based on connections and valid triplets in the map.
      * Formula: (correct_connections / (triplet_count * 2)) * 100
+     *
+     * Valid connections must be:
+     * - Claim -> Evidence (c-X -> e-X)
+     * - Evidence -> Reasoning (e-X -> r-X)
+     *
+     * Duplicate connections, self-connections, and invalid pairs are filtered out.
      *
      * @param  CerMap  $map
      * @param  array  $connections  List of [from => ..., to => ...]
@@ -43,19 +62,48 @@ class ScoringService
 
         $validTripletIds = $triplets->pluck('id')->map(fn ($id) => (int) $id)->toArray();
         $totalShouldBe = $tripletCount * 2;
-        $correct = 0;
+        $matchedKeys = [];
 
         foreach ($connections as $conn) {
-            $fromId = isset($conn['from']) ? $this->getCardTripletId((string) $conn['from']) : null;
-            $toId = isset($conn['to']) ? $this->getCardTripletId((string) $conn['to']) : null;
+            $fromStr = isset($conn['from']) ? (string) $conn['from'] : '';
+            $toStr = isset($conn['to']) ? (string) $conn['to'] : '';
 
-            // Connection is correct if both endpoints point to the same triplet ID
-            // and that triplet actually belongs to this CER Map.
-            if ($fromId !== null && $toId !== null && $fromId === $toId && in_array($fromId, $validTripletIds, true)) {
-                $correct++;
+            // Reject empty or self-connections
+            if ($fromStr === '' || $toStr === '' || $fromStr === $toStr) {
+                continue;
+            }
+
+            $fromId = $this->getCardTripletId($fromStr);
+            $toId = $this->getCardTripletId($toStr);
+            $fromType = $this->getCardType($fromStr);
+            $toType = $this->getCardType($toStr);
+
+            // Both endpoints must belong to the same triplet ID from this map
+            if ($fromId === null || $toId === null || $fromId !== $toId || ! in_array($fromId, $validTripletIds, true)) {
+                continue;
+            }
+
+            // Connection must be either Claim-to-Evidence or Evidence-to-Reasoning
+            $relationKey = null;
+            if ($fromType === 'c' && $toType === 'e') {
+                $relationKey = "{$fromId}:c-e";
+            } elseif ($fromType === 'e' && $toType === 'r') {
+                $relationKey = "{$fromId}:e-r";
+            } elseif ($fromType === 'e' && $toType === 'c') {
+                // Allow reverse direction as Claim-to-Evidence
+                $relationKey = "{$fromId}:c-e";
+            } elseif ($fromType === 'r' && $toType === 'e') {
+                // Allow reverse direction as Evidence-to-Reasoning
+                $relationKey = "{$fromId}:e-r";
+            }
+
+            // Count each unique valid relation only once (prevent duplicate connection exploit)
+            if ($relationKey !== null && ! in_array($relationKey, $matchedKeys, true)) {
+                $matchedKeys[] = $relationKey;
             }
         }
 
+        $correct = count($matchedKeys);
         $rawScore = ($correct / $totalShouldBe) * 100;
 
         // Clamp between 0.00 and 100.00

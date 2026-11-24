@@ -158,12 +158,21 @@
     }
 
     function getNodePos(node) {
-        const editor = document.getElementById('view-editor');
-        const editorRect = editor.getBoundingClientRect();
+        const svg = document.getElementById('svg-canvas');
+        if (!svg) {
+            const editor = document.getElementById('view-editor');
+            const editorRect = editor ? editor.getBoundingClientRect() : { left: 0, top: 0 };
+            const rect = node.getBoundingClientRect();
+            return {
+                x: rect.left - editorRect.left + (rect.width / 2),
+                y: rect.top - editorRect.top + (rect.height / 2)
+            };
+        }
+        const svgRect = svg.getBoundingClientRect();
         const rect = node.getBoundingClientRect();
         return {
-            x: rect.left - editorRect.left + (rect.width / 2) + editor.scrollLeft,
-            y: rect.top - editorRect.top + (rect.height / 2) + editor.scrollTop
+            x: rect.left - svgRect.left + (rect.width / 2),
+            y: rect.top - svgRect.top + (rect.height / 2)
         };
     }
 
@@ -173,6 +182,13 @@
         
         lineGroup.innerHTML = '';
         if(!mapData.connections) return;
+
+        const editor = document.getElementById('view-editor');
+        const svg = document.getElementById('svg-canvas');
+        if (editor && svg) {
+            svg.style.height = Math.max(editor.scrollHeight, editor.clientHeight) + 'px';
+            svg.style.width = Math.max(editor.scrollWidth, editor.clientWidth) + 'px';
+        }
 
         mapData.connections.forEach(c => {
             const elFrom = document.getElementById(c.from);

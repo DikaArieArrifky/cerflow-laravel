@@ -186,12 +186,21 @@
     }
 
     function getNodePos(node) {
-        const editor = document.getElementById('view-editor');
-        const editorRect = editor.getBoundingClientRect();
+        const svg = document.getElementById('svg-canvas');
+        if (!svg) {
+            const editor = document.getElementById('view-editor');
+            const editorRect = editor ? editor.getBoundingClientRect() : { left: 0, top: 0 };
+            const rect = node.getBoundingClientRect();
+            return {
+                x: rect.left - editorRect.left + (rect.width / 2),
+                y: rect.top - editorRect.top + (rect.height / 2)
+            };
+        }
+        const svgRect = svg.getBoundingClientRect();
         const rect = node.getBoundingClientRect();
         return {
-            x: rect.left - editorRect.left + (rect.width / 2) + editor.scrollLeft,
-            y: rect.top - editorRect.top + (rect.height / 2) + editor.scrollTop
+            x: rect.left - svgRect.left + (rect.width / 2),
+            y: rect.top - svgRect.top + (rect.height / 2)
         };
     }
 
@@ -201,6 +210,13 @@
         
         lineGroup.innerHTML = '';
         if(!mapData.connections) return;
+
+        const editor = document.getElementById('view-editor');
+        const svg = document.getElementById('svg-canvas');
+        if (editor && svg) {
+            svg.style.height = Math.max(editor.scrollHeight, editor.clientHeight) + 'px';
+            svg.style.width = Math.max(editor.scrollWidth, editor.clientWidth) + 'px';
+        }
 
         mapData.connections.forEach(c => {
             const elFrom = document.getElementById(c.from);
@@ -217,7 +233,11 @@
                     const dist = Math.abs(p2.x - p1.x) * 0.5;
                     const d = `M ${p1.x} ${p1.y} C ${p1.x + dist} ${p1.y}, ${p2.x - dist} ${p2.y}, ${p2.x} ${p2.y}`;
                     
-                    const isCorrect = getCardTripletId(c.from) === getCardTripletId(c.to);
+                    const fromId = getCardTripletId(c.from);
+                    const toId = getCardTripletId(c.to);
+                    const fromType = String(c.from)[0];
+                    const toType = String(c.to)[0];
+                    const isCorrect = (fromId === toId) && ((fromType === 'c' && toType === 'e') || (fromType === 'e' && toType === 'r'));
                     
                     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
                     path.setAttribute("d", d);
