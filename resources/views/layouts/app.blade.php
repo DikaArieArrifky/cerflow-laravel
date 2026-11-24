@@ -6,6 +6,9 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ ($pageTitle ?? null) ? (str_ends_with($pageTitle, 'CER Flow') ? $pageTitle : $pageTitle . ' - CER Flow') : 'CER Flow' }}</title>
     
+    {{-- Favicon --}}
+    <link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}">
+    
     {{-- Tailwind CSS CDN --}}
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
